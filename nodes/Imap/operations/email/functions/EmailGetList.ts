@@ -209,21 +209,21 @@ export const getEmailsListOperation: IResourceOperationDef = {
         
         // Only process if originalDate is not empty
         if (originalDate && originalDate.trim()) {
+          // Keep original date string for reference BEFORE parsing
+          item_json.envelope.dateOriginal = originalDate;
+          
           // Parse the date string (handles non-standard formats)
           // This will return ISO string for both standard and non-standard formats
           const parsedDate = parseEmailDate(originalDate);
+          
+          // Always set envelope.date to parsed date (or original if parsing failed)
           if (parsedDate && parsedDate.trim()) {
-            // Always update envelope.date to parsed ISO format
             item_json.envelope.date = parsedDate;
-            // Always add a convenience field at the top level
-            item_json.date = parsedDate;
-          } else {
-            // If parsing failed but we have originalDate, still add top-level date field
-            // This ensures date field is always present when envelope.date exists
-            item_json.date = originalDate;
           }
-          // Keep original date string for reference
-          item_json.envelope.dateOriginal = originalDate;
+          
+          // ALWAYS add a convenience field at the top level
+          // Use parsed date if available, otherwise use original
+          item_json.date = (parsedDate && parsedDate.trim()) ? parsedDate : originalDate;
         }
       }
       // ============================================
