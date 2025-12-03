@@ -193,16 +193,38 @@ export const getEmailsListOperation: IResourceOperationDef = {
       // ============================================
       // FIX: Parse non-standard date formats
       // ============================================
-      if (item_json.envelope?.date) {
-        const originalDate = item_json.envelope.date;
-        const parsedDate = parseEmailDate(originalDate);
-        if (parsedDate) {
-          item_json.envelope.date = parsedDate;
-          // Also add a convenience field at the top level
-          item_json.date = parsedDate;
+      if (item_json.envelope?.date !== null && item_json.envelope?.date !== undefined) {
+        // Convert to string if it's a Date object or already a string
+        // Note: After JSON.parse(JSON.stringify()), Date objects become ISO strings
+        let originalDate: string;
+        if (typeof item_json.envelope.date === 'string') {
+          originalDate = item_json.envelope.date;
+        } else if (item_json.envelope.date instanceof Date) {
+          // This shouldn't happen after JSON serialization, but handle it anyway
+          originalDate = item_json.envelope.date.toISOString();
+        } else {
+          // If it's something else, convert to string
+          originalDate = String(item_json.envelope.date);
         }
-        // Keep original date string for reference
-        item_json.envelope.dateOriginal = originalDate;
+        
+        // Only process if originalDate is not empty
+        if (originalDate && originalDate.trim()) {
+          // Parse the date string (handles non-standard formats)
+          // This will return ISO string for both standard and non-standard formats
+          const parsedDate = parseEmailDate(originalDate);
+          if (parsedDate && parsedDate.trim()) {
+            // Always update envelope.date to parsed ISO format
+            item_json.envelope.date = parsedDate;
+            // Always add a convenience field at the top level
+            item_json.date = parsedDate;
+          } else {
+            // If parsing failed but we have originalDate, still add top-level date field
+            // This ensures date field is always present when envelope.date exists
+            item_json.date = originalDate;
+          }
+          // Keep original date string for reference
+          item_json.envelope.dateOriginal = originalDate;
+        }
       }
       // ============================================
 
