@@ -6,6 +6,7 @@ import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from "../../.
 import { emailSearchParameters, getEmailSearchParametersFromNode } from "../../../utils/EmailSearchParameters";
 import { simpleParser } from 'mailparser';
 import { EmailPartInfo, getEmailPartsInfoRecursive } from "../../../utils/EmailParts";
+import { parseEmailDate } from "../../../utils/dateParser";
 
 
 export enum EmailParts {
@@ -188,6 +189,22 @@ export const getEmailsListOperation: IResourceOperationDef = {
 
       // add mailbox path to the item
       item_json.mailboxPath = mailboxPath;
+
+      // ============================================
+      // FIX: Parse non-standard date formats
+      // ============================================
+      if (item_json.envelope?.date) {
+        const originalDate = item_json.envelope.date;
+        const parsedDate = parseEmailDate(originalDate);
+        if (parsedDate) {
+          item_json.envelope.date = parsedDate;
+          // Also add a convenience field at the top level
+          item_json.date = parsedDate;
+        }
+        // Keep original date string for reference
+        item_json.envelope.dateOriginal = originalDate;
+      }
+      // ============================================
 
       // process the headers
       if (includeParts.includes(EmailParts.Headers)) {
