@@ -193,10 +193,12 @@ export const getEmailsListOperation: IResourceOperationDef = {
       // ============================================
       // FIX: Parse non-standard date formats
       // ============================================
+      let originalDate: string | null = null;
+      
+      // First, try to get date from envelope
       if (item_json.envelope?.date !== null && item_json.envelope?.date !== undefined) {
         // Convert to string if it's a Date object or already a string
         // Note: After JSON.parse(JSON.stringify()), Date objects become ISO strings
-        let originalDate: string;
         if (typeof item_json.envelope.date === 'string') {
           originalDate = item_json.envelope.date;
         } else if (item_json.envelope.date instanceof Date) {
@@ -206,25 +208,49 @@ export const getEmailsListOperation: IResourceOperationDef = {
           // If it's something else, convert to string
           originalDate = String(item_json.envelope.date);
         }
-        
-        // Only process if originalDate is not empty
-        if (originalDate && originalDate.trim()) {
-          // Keep original date string for reference BEFORE parsing
-          item_json.envelope.dateOriginal = originalDate;
-          
-          // Parse the date string (handles non-standard formats)
-          // This will return ISO string for both standard and non-standard formats
-          const parsedDate = parseEmailDate(originalDate);
-          
-          // Always set envelope.date to parsed date (or original if parsing failed)
-          if (parsedDate && parsedDate.trim()) {
-            item_json.envelope.date = parsedDate;
+      }
+      
+      // If envelope.date is not available, try to get date from headers
+      if ((!originalDate || !originalDate.trim()) && email.headers) {
+        try {
+          const headersString = email.headers.toString();
+          // Try to extract Date header manually
+          const dateHeaderMatch = headersString.match(/^Date:\s*(.+)$/im);
+          if (dateHeaderMatch && dateHeaderMatch[1]) {
+            originalDate = dateHeaderMatch[1].trim();
+            logger.info(`    Extracted date from headers: ${originalDate}`);
           }
-          
-          // ALWAYS add a convenience field at the top level
-          // Use parsed date if available, otherwise use original
-          item_json.date = (parsedDate && parsedDate.trim()) ? parsedDate : originalDate;
+        } catch (error) {
+          logger.debug(`    Could not extract date from headers: ${error}`);
         }
+      }
+      
+      // Process date if we have one
+      if (originalDate && originalDate.trim()) {
+        // Keep original date string for reference BEFORE parsing
+        if (item_json.envelope) {
+          item_json.envelope.dateOriginal = originalDate;
+        } else {
+          item_json.envelope = { dateOriginal: originalDate };
+        }
+        
+        // Parse the date string (handles non-standard formats)
+        // This will return ISO string for both standard and non-standard formats
+        const parsedDate = parseEmailDate(originalDate);
+        
+        // Always set envelope.date to parsed date (or original if parsing failed)
+        if (parsedDate && parsedDate.trim()) {
+          if (!item_json.envelope) {
+            item_json.envelope = {};
+          }
+          item_json.envelope.date = parsedDate;
+        } else if (!item_json.envelope) {
+          item_json.envelope = { date: originalDate };
+        }
+        
+        // ALWAYS add a convenience field at the top level
+        // Use parsed date if available, otherwise use original
+        item_json.date = (parsedDate && parsedDate.trim()) ? parsedDate : originalDate;
       }
       // ============================================
 
