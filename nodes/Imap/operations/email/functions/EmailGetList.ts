@@ -141,6 +141,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
     if (includeParts.includes(EmailParts.Size)) {
       fetchQuery.size = true;
     }
+    // Always fetch Date header to ensure we can extract date even if envelope.date is missing
     if (includeParts.includes(EmailParts.Headers)) {      
       // check if user wants only specific headers
       const includeAllHeaders = context.getNodeParameter('includeAllHeaders', itemIndex) as boolean;
@@ -150,10 +151,21 @@ export const getEmailsListOperation: IResourceOperationDef = {
         const headersToInclude = context.getNodeParameter('headersToInclude', itemIndex) as string;
         logger.info(`Including headers: ${headersToInclude}`);
         if (headersToInclude) {
-          fetchQuery.headers = headersToInclude.split(',').map((header) => header.trim());
+          const headersList = headersToInclude.split(',').map((header) => header.trim());
+          // Ensure Date header is included
+          if (!headersList.includes('Date') && !headersList.includes('date')) {
+            headersList.push('Date');
+          }
+          fetchQuery.headers = headersList;
           logger.info(`Including headers: ${fetchQuery.headers}`);
+        } else {
+          // If no specific headers, at least fetch Date header
+          fetchQuery.headers = ['Date'];
         }
       }
+    } else {
+      // Even if headers are not requested, fetch Date header for date extraction
+      fetchQuery.headers = ['Date'];
     }
 
     // will parse the bodystructure to get the attachments info
@@ -191,7 +203,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
       item_json.mailboxPath = mailboxPath;
 
       // ============================================
-      // FIX: Parse non-standard date formats
+      // FIX: Extract and display date from email (always show date if available)
       // ============================================
       let originalDate: string | null = null;
       
@@ -214,8 +226,9 @@ export const getEmailsListOperation: IResourceOperationDef = {
       if ((!originalDate || !originalDate.trim()) && email.headers) {
         try {
           const headersString = email.headers.toString();
-          // Try to extract Date header manually
-          const dateHeaderMatch = headersString.match(/^Date:\s*(.+)$/im);
+          // Try to extract Date header manually - match "Date: " followed by the date value
+          // Handle both single-line and multi-line headers
+          const dateHeaderMatch = headersString.match(/^Date:\s*([^\r\n]+)/im);
           if (dateHeaderMatch && dateHeaderMatch[1]) {
             originalDate = dateHeaderMatch[1].trim();
             logger.info(`    Extracted date from headers: ${originalDate}`);
@@ -225,32 +238,30 @@ export const getEmailsListOperation: IResourceOperationDef = {
         }
       }
       
-      // Process date if we have one
+      // ALWAYS set date fields if we found a date (even if it's in non-standard format)
       if (originalDate && originalDate.trim()) {
-        // Keep original date string for reference BEFORE parsing
-        if (item_json.envelope) {
-          item_json.envelope.dateOriginal = originalDate;
-        } else {
-          item_json.envelope = { dateOriginal: originalDate };
+        // Ensure envelope object exists
+        if (!item_json.envelope) {
+          item_json.envelope = {};
         }
         
-        // Parse the date string (handles non-standard formats)
-        // This will return ISO string for both standard and non-standard formats
+        // Keep original date string for reference
+        item_json.envelope.dateOriginal = originalDate;
+        
+        // Try to parse the date, but if it fails, use original
         const parsedDate = parseEmailDate(originalDate);
         
-        // Always set envelope.date to parsed date (or original if parsing failed)
-        if (parsedDate && parsedDate.trim()) {
-          if (!item_json.envelope) {
-            item_json.envelope = {};
-          }
+        // Set envelope.date to parsed date if successful, otherwise use original
+        if (parsedDate && parsedDate.trim() && parsedDate !== originalDate) {
           item_json.envelope.date = parsedDate;
-        } else if (!item_json.envelope) {
-          item_json.envelope = { date: originalDate };
+        } else {
+          // Use original date if parsing failed or returned the same value
+          item_json.envelope.date = originalDate;
         }
         
         // ALWAYS add a convenience field at the top level
-        // Use parsed date if available, otherwise use original
-        item_json.date = (parsedDate && parsedDate.trim()) ? parsedDate : originalDate;
+        // Use original date as-is (user wants to see date in original format first)
+        item_json.date = originalDate;
       }
       // ============================================
 
