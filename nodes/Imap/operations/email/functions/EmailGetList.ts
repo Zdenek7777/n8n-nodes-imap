@@ -1,6 +1,6 @@
 import { FetchMessageObject, FetchQueryObject, ImapFlow } from "imapflow";
 import { Readable } from "stream";
-import { IExecuteFunctions, INodeExecutionData, Logger as N8nLogger } from "n8n-workflow";
+import { IDataObject, IExecuteFunctions, INodeExecutionData, Logger as N8nLogger } from "n8n-workflow";
 import { IResourceOperationDef } from "../../../utils/CommonDefinitions";
 import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from "../../../utils/SearchFieldParameters";
 import { emailSearchParameters, getEmailSearchParametersFromNode } from "../../../utils/EmailSearchParameters";
@@ -126,6 +126,41 @@ export const getEmailsListOperation: IResourceOperationDef = {
 
     var searchObject = getEmailSearchParametersFromNode(context, itemIndex);
 
+    // Log date range parameters for debugging
+    const emailDateRangeObj = context.getNodeParameter('emailDateRange', itemIndex) as IDataObject;
+    const sinceInput = emailDateRangeObj['since'] as string;
+    const beforeInput = emailDateRangeObj['before'] as string;
+    
+    if (sinceInput || beforeInput) {
+      logger.info(`Date range input - Since: ${sinceInput || 'not set'}, Before: ${beforeInput || 'not set'}`);
+      
+      // Check if time components are specified (IMAP only works with dates, not times)
+      if (sinceInput) {
+        const sinceDate = new Date(sinceInput);
+        const hasTimeComponent = sinceDate.getHours() !== 0 || sinceDate.getMinutes() !== 0 || sinceDate.getSeconds() !== 0;
+        if (hasTimeComponent) {
+          logger.warn(`IMAP protocol limitation: 'Since' date has time component (${sinceInput}), but IMAP SEARCH only works with dates, not times. The search will include all emails from the entire day.`);
+        }
+      }
+      if (beforeInput) {
+        const beforeDate = new Date(beforeInput);
+        const hasTimeComponent = beforeDate.getHours() !== 0 || beforeDate.getMinutes() !== 0 || beforeDate.getSeconds() !== 0;
+        if (hasTimeComponent) {
+          logger.warn(`IMAP protocol limitation: 'Before' date has time component (${beforeInput}), but IMAP SEARCH only works with dates, not times. The search will include all emails from the entire day.`);
+        }
+      }
+      
+      // Log what will actually be sent to IMAP server
+      if (searchObject.since) {
+        const sinceDate = searchObject.since as Date;
+        logger.info(`IMAP SEARCH will use SINCE: ${sinceDate.toISOString().split('T')[0]} (date only, time ignored)`);
+      }
+      if (searchObject.before) {
+        const beforeDate = searchObject.before as Date;
+        logger.info(`IMAP SEARCH will use BEFORE: ${beforeDate.toISOString().split('T')[0]} (date only, time ignored)`);
+      }
+    }
+
     const includeParts = context.getNodeParameter('includeParts', itemIndex) as string[];
     var fetchQuery : FetchQueryObject = {
       uid: true,
@@ -192,10 +227,68 @@ export const getEmailsListOperation: IResourceOperationDef = {
     for  await (let email of client.fetch(searchObject, fetchQuery)) {
       emailsList.push(email);
     }
-    logger.info(`Found ${emailsList.length} emails`);
+    logger.info(`Found ${emailsList.length} emails from IMAP server`);
+
+    // Client-side filtering by time if time components were specified
+    // (IMAP protocol only supports date-based search, not time-based)
+    let filteredEmailsList: FetchMessageObject[] = emailsList;
+    if (sinceInput || beforeInput) {
+      const sinceDate = sinceInput ? new Date(sinceInput) : null;
+      const beforeDate = beforeInput ? new Date(beforeInput) : null;
+      
+      // Check if time filtering is needed (if time components are specified)
+      const needsTimeFiltering = 
+        (sinceDate && (sinceDate.getHours() !== 0 || sinceDate.getMinutes() !== 0 || sinceDate.getSeconds() !== 0)) ||
+        (beforeDate && (beforeDate.getHours() !== 0 || beforeDate.getMinutes() !== 0 || beforeDate.getSeconds() !== 0));
+      
+      if (needsTimeFiltering) {
+        logger.info(`Applying client-side time filtering (IMAP only supports date-based search)`);
+        filteredEmailsList = emailsList.filter((email) => {
+          // Get email date from envelope or headers
+          let emailDate: Date | null = null;
+          
+          if (email.envelope?.date) {
+            emailDate = email.envelope.date instanceof Date ? email.envelope.date : new Date(email.envelope.date);
+          } else if (email.headers) {
+            try {
+              const headersString = email.headers.toString();
+              const dateHeaderMatch = headersString.match(/^Date:\s*([^\r\n]+)/im);
+              if (dateHeaderMatch && dateHeaderMatch[1]) {
+                const parsedDate = parseEmailDate(dateHeaderMatch[1].trim());
+                if (parsedDate) {
+                  emailDate = new Date(parsedDate);
+                }
+              }
+            } catch (error) {
+              logger.debug(`    Could not extract date from headers for filtering: ${error}`);
+            }
+          }
+          
+          if (!emailDate || isNaN(emailDate.getTime())) {
+            // If we can't determine the date, include the email (don't filter it out)
+            logger.debug(`    Email ${email.uid}: Could not determine date, including in results`);
+            return true;
+          }
+          
+          // Check if email date is within the time range
+          const isAfterSince = !sinceDate || emailDate >= sinceDate;
+          const isBeforeBefore = !beforeDate || emailDate < beforeDate;
+          
+          const isInRange = isAfterSince && isBeforeBefore;
+          
+          if (!isInRange) {
+            logger.debug(`    Email ${email.uid}: Filtered out (date: ${emailDate.toISOString()}, since: ${sinceDate?.toISOString() || 'none'}, before: ${beforeDate?.toISOString() || 'none'})`);
+          }
+          
+          return isInRange;
+        });
+        
+        logger.info(`After time filtering: ${filteredEmailsList.length} emails (filtered out ${emailsList.length - filteredEmailsList.length} emails)`);
+      }
+    }
 
     // process the emails
-    for (const email of emailsList) {
+    for (const email of filteredEmailsList) {
       logger.info(`  ${email.uid}`);
       var item_json = JSON.parse(JSON.stringify(email));
 
