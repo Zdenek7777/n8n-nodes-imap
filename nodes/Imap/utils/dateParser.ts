@@ -179,3 +179,92 @@ export function parseEmailDate(dateStr: string | null | undefined): string | nul
     // This preserves the original data for debugging purposes
     return dateStr;
 }
+
+/**
+ * Converts an ISO date string to RFC 2822 format in Czech Republic timezone (+0100 CET or +0200 CEST).
+ * 
+ * @param isoDateStr - ISO 8601 formatted date string (e.g., "2025-12-03T13:42:50.000Z")
+ * @returns RFC 2822 formatted date string in CR timezone (e.g., "Wed, 03 Dec 2025 14:42:50 +0100 (CET)")
+ */
+export function convertToCRTimezone(isoDateStr: string | null | undefined): string | null {
+    if (!isoDateStr) return null;
+    
+    try {
+        const date = new Date(isoDateStr);
+        if (isNaN(date.getTime())) {
+            return null;
+        }
+        
+        // Format date in CR timezone (Europe/Prague)
+        const crFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Europe/Prague',
+            weekday: 'short',
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        });
+        
+        // Get CR timezone parts
+        const crParts = crFormatter.formatToParts(date);
+        const weekday = crParts.find(p => p.type === 'weekday')?.value || 'Mon';
+        const day = crParts.find(p => p.type === 'day')?.value || '01';
+        const month = crParts.find(p => p.type === 'month')?.value || 'Jan';
+        const year = crParts.find(p => p.type === 'year')?.value || '2025';
+        const hour = crParts.find(p => p.type === 'hour')?.value || '00';
+        const minute = crParts.find(p => p.type === 'minute')?.value || '00';
+        const second = crParts.find(p => p.type === 'second')?.value || '00';
+        
+        // Get UTC time for the same moment to calculate offset
+        const utcFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'UTC',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+        });
+        
+        const utcParts = utcFormatter.formatToParts(date);
+        const utcHour = parseInt(utcParts.find(p => p.type === 'hour')?.value || '0');
+        const utcMinute = parseInt(utcParts.find(p => p.type === 'minute')?.value || '0');
+        const utcDay = parseInt(utcParts.find(p => p.type === 'day')?.value || '1');
+        
+        const crHour = parseInt(hour);
+        const crMinute = parseInt(minute);
+        const crDay = parseInt(day);
+        
+        // Calculate offset: difference between CR time and UTC time
+        let offsetMinutes = (crHour * 60 + crMinute) - (utcHour * 60 + utcMinute);
+        
+        // Adjust for day difference
+        if (crDay !== utcDay) {
+            if (crDay > utcDay) {
+                offsetMinutes += 1440; // CR is ahead by a day
+            } else {
+                offsetMinutes -= 1440; // CR is behind by a day
+            }
+        }
+        
+        // Normalize to -720 to +720 range (should be +60 or +120 for CR)
+        while (offsetMinutes > 720) offsetMinutes -= 1440;
+        while (offsetMinutes < -720) offsetMinutes += 1440;
+        
+        const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
+        const offsetMins = Math.abs(offsetMinutes) % 60;
+        const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+        const offsetStr = `${offsetSign}${String(offsetHours).padStart(2, '0')}${String(offsetMins).padStart(2, '0')}`;
+        
+        // Determine if it's CET or CEST (CET = +0100, CEST = +0200)
+        const isDST = offsetMinutes === 120; // CEST is UTC+2
+        const tzName = isDST ? 'CEST' : 'CET';
+        
+        return `${weekday}, ${day} ${month} ${year} ${hour}:${minute}:${second} ${offsetStr} (${tzName})`;
+    } catch (error) {
+        return null;
+    }
+}

@@ -6,7 +6,7 @@ import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from "../../.
 import { emailSearchParameters, getEmailSearchParametersFromNode } from "../../../utils/EmailSearchParameters";
 import { simpleParser } from 'mailparser';
 import { EmailPartInfo, getEmailPartsInfoRecursive } from "../../../utils/EmailParts";
-import { parseEmailDate } from "../../../utils/dateParser";
+import { parseEmailDate, convertToCRTimezone } from "../../../utils/dateParser";
 
 
 export enum EmailParts {
@@ -207,23 +207,9 @@ export const getEmailsListOperation: IResourceOperationDef = {
       // ============================================
       let originalDate: string | null = null;
       
-      // First, try to get date from envelope
-      if (item_json.envelope?.date !== null && item_json.envelope?.date !== undefined) {
-        // Convert to string if it's a Date object or already a string
-        // Note: After JSON.parse(JSON.stringify()), Date objects become ISO strings
-        if (typeof item_json.envelope.date === 'string') {
-          originalDate = item_json.envelope.date;
-        } else if (item_json.envelope.date instanceof Date) {
-          // This shouldn't happen after JSON serialization, but handle it anyway
-          originalDate = item_json.envelope.date.toISOString();
-        } else {
-          // If it's something else, convert to string
-          originalDate = String(item_json.envelope.date);
-        }
-      }
-      
-      // If envelope.date is not available, try to get date from headers
-      if ((!originalDate || !originalDate.trim()) && email.headers) {
+      // First, try to get original date from headers (before JSON serialization converts it)
+      // This preserves the exact format as received in the email
+      if (email.headers) {
         try {
           const headersString = email.headers.toString();
           // Try to extract Date header manually - match "Date: " followed by the date value
@@ -238,6 +224,21 @@ export const getEmailsListOperation: IResourceOperationDef = {
         }
       }
       
+      // If not found in headers, try to get date from envelope
+      // Note: After JSON.parse(JSON.stringify()), Date objects become ISO strings
+      if ((!originalDate || !originalDate.trim()) && item_json.envelope?.date !== null && item_json.envelope?.date !== undefined) {
+        // Convert to string if it's a Date object or already a string
+        if (typeof item_json.envelope.date === 'string') {
+          originalDate = item_json.envelope.date;
+        } else if (item_json.envelope.date instanceof Date) {
+          // This shouldn't happen after JSON serialization, but handle it anyway
+          originalDate = item_json.envelope.date.toISOString();
+        } else {
+          // If it's something else, convert to string
+          originalDate = String(item_json.envelope.date);
+        }
+      }
+      
       // ALWAYS set date fields if we found a date (even if it's in non-standard format)
       if (originalDate && originalDate.trim()) {
         // Ensure envelope object exists
@@ -245,23 +246,34 @@ export const getEmailsListOperation: IResourceOperationDef = {
           item_json.envelope = {};
         }
         
-        // Keep original date string for reference
-        item_json.envelope.dateOriginal = originalDate;
+        // Store original date exactly as received (before any parsing)
+        const dateOriginal = originalDate;
         
-        // Try to parse the date, but if it fails, use original
-        const parsedDate = parseEmailDate(originalDate);
+        // Try to parse the date to ISO format
+        const parsedDateISO = parseEmailDate(originalDate);
         
-        // Set envelope.date to parsed date if successful, otherwise use original
-        if (parsedDate && parsedDate.trim() && parsedDate !== originalDate) {
-          item_json.envelope.date = parsedDate;
-        } else {
-          // Use original date if parsing failed or returned the same value
-          item_json.envelope.date = originalDate;
+        // Convert parsed ISO date to CR timezone format
+        let dateInCRTimezone: string | null = null;
+        if (parsedDateISO && parsedDateISO.trim() && parsedDateISO !== originalDate) {
+          dateInCRTimezone = convertToCRTimezone(parsedDateISO);
         }
         
-        // ALWAYS add a convenience field at the top level
-        // Use original date as-is (user wants to see date in original format first)
-        item_json.date = originalDate;
+        // Reconstruct envelope object with correct field order: date, dateOriginal, then other fields
+        const envelopeDate = dateInCRTimezone || parsedDateISO || originalDate;
+        const envelopeDateOriginal = dateOriginal;
+        
+        // Get all other envelope fields
+        const { date: _, dateOriginal: __, ...otherEnvelopeFields } = item_json.envelope;
+        
+        // Rebuild envelope with correct order: date first, then dateOriginal, then other fields
+        item_json.envelope = {
+          date: envelopeDate,
+          dateOriginal: envelopeDateOriginal,
+          ...otherEnvelopeFields,
+        };
+        
+        // Set top-level date field to CR timezone format (or parsed ISO if conversion failed)
+        item_json.date = dateInCRTimezone || parsedDateISO || originalDate;
       }
       // ============================================
 
@@ -353,6 +365,14 @@ export const getEmailsListOperation: IResourceOperationDef = {
             }
           }
         }
+      }
+
+      // Remove headers and buffer from output (they were added by developer but should not be in output)
+      if (item_json.headers !== undefined) {
+        delete item_json.headers;
+      }
+      if (item_json.buffer !== undefined) {
+        delete item_json.buffer;
       }
 
       returnData.push({
