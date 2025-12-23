@@ -165,6 +165,9 @@ export const getEmailsListOperation: IResourceOperationDef = {
     var fetchQuery : FetchQueryObject = {
       uid: true,
       envelope: true,
+      // Note: internalDate is automatically included in FetchMessageObject by imapflow
+      // It represents when email actually arrived on server (INTERNALDATE)
+      // This is more accurate than Date header, especially for forwarded emails
     };
 
     if (includeParts.includes(EmailParts.BodyStructure)) {
@@ -244,12 +247,31 @@ export const getEmailsListOperation: IResourceOperationDef = {
       if (needsTimeFiltering) {
         logger.info(`Applying client-side time filtering (IMAP only supports date-based search)`);
         filteredEmailsList = emailsList.filter((email) => {
-          // Get email date from envelope or headers
+          // IMPORTANT: Use INTERNALDATE (actual delivery time) instead of Date header (original send time)
+          // This fixes the issue where forwarded emails have Date header from original send time,
+          // but were actually delivered later (e.g., due to greylisting, SMTP delays, etc.)
+          // INTERNALDATE represents when the email actually arrived on the IMAP server
           let emailDate: Date | null = null;
+          let dateSource = 'unknown';
           
-          if (email.envelope?.date) {
+          // Priority 1: Use internalDate (INTERNALDATE from IMAP server - actual delivery time)
+          // This is the most accurate for filtering, as it represents when email actually arrived
+          // Note: internalDate is automatically included in FetchMessageObject by imapflow
+          const emailInternalDate = (email as any).internalDate;
+          if (emailInternalDate) {
+            emailDate = emailInternalDate instanceof Date 
+              ? emailInternalDate 
+              : new Date(emailInternalDate);
+            dateSource = 'internalDate';
+          }
+          // Priority 2: Fallback to envelope.date (may still be Date header, but better than nothing)
+          else if (email.envelope?.date) {
             emailDate = email.envelope.date instanceof Date ? email.envelope.date : new Date(email.envelope.date);
-          } else if (email.headers) {
+            dateSource = 'envelope.date';
+            logger.debug(`    Email ${email.uid}: Using envelope.date as fallback (internalDate not available)`);
+          }
+          // Priority 3: Extract Date header as last resort
+          else if (email.headers) {
             try {
               const headersString = email.headers.toString();
               const dateHeaderMatch = headersString.match(/^Date:\s*([^\r\n]+)/im);
@@ -257,10 +279,12 @@ export const getEmailsListOperation: IResourceOperationDef = {
                 const parsedDate = parseEmailDate(dateHeaderMatch[1].trim());
                 if (parsedDate) {
                   emailDate = new Date(parsedDate);
+                  dateSource = 'Date header';
+                  logger.debug(`    Email ${email.uid}: Using Date header as fallback (internalDate and envelope.date not available)`);
                 }
               }
             } catch (error) {
-              logger.debug(`    Could not extract date from headers for filtering: ${error}`);
+              logger.debug(`    Email ${email.uid}: Could not extract date from headers for filtering: ${error}`);
             }
           }
           
@@ -277,7 +301,9 @@ export const getEmailsListOperation: IResourceOperationDef = {
           const isInRange = isAfterSince && isBeforeBefore;
           
           if (!isInRange) {
-            logger.debug(`    Email ${email.uid}: Filtered out (date: ${emailDate.toISOString()}, since: ${sinceDate?.toISOString() || 'none'}, before: ${beforeDate?.toISOString() || 'none'})`);
+            logger.debug(`    Email ${email.uid}: Filtered out (date: ${emailDate.toISOString()} [${dateSource}], since: ${sinceDate?.toISOString() || 'none'}, before: ${beforeDate?.toISOString() || 'none'})`);
+          } else {
+            logger.debug(`    Email ${email.uid}: Passed filter (date: ${emailDate.toISOString()} [${dateSource}])`);
           }
           
           return isInRange;
