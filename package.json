@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-imap",
-  "version": "2.15.0",
-  "description": "This node allows you to connect to an IMAP server and retrieve emails.",
+  "version": "2.15.0.2",
+  "description": "This node allows you to connect to an IMAP server and retrieve emails. Fork by Zdeněk Bílek with timezone and date parsing fixes.",
   "keywords": [
     "n8n-community-node-package"
   ],
@@ -11,6 +11,12 @@
     "name": "Vasily Maslyukov",
     "email": "auro.coding@gmail.com"
   },
+  "contributors": [
+    {
+      "name": "Zdeněk Bílek",
+      "email": "bilek@fyzioklinika.cz"
+    }
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/umanamente/n8n-nodes-imap.git"
