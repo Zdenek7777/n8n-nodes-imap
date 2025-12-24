@@ -2,7 +2,7 @@ import { ImapFlow } from 'imapflow';
 import { IExecuteFunctions, INodeExecutionData, Logger as N8nLogger } from 'n8n-workflow';
 import { IResourceOperationDef } from '../../../utils/CommonDefinitions';
 import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from '../../../utils/SearchFieldParameters';
-import { ImapFlowErrorCatcher, NodeImapError } from '../../../utils/ImapUtils';
+import { ImapFlowErrorCatcher, NodeImapError, resolveEmailUids } from '../../../utils/ImapUtils';
 
 export const deleteEmailOperation: IResourceOperationDef = {
   operation: {
@@ -22,7 +22,14 @@ export const deleteEmailOperation: IResourceOperationDef = {
       default: '',
       description: 'UID of the email to delete',
       hint: 'You can use a comma separated list of UIDs to delete multiple emails at once',
-      required: true,
+    },
+    {
+      displayName: 'Email Message-ID (Optional)',
+      name: 'messageId',
+      type: 'string',
+      default: '',
+      description: 'Message-ID from email header to identify the email (alternative to UID)',
+      hint: 'You can use comma separated list of Message-IDs to delete multiple emails at once. Supports partial matching (e.g. @example.com)',
     },
   ],
   async executeImapAction(
@@ -35,13 +42,45 @@ export const deleteEmailOperation: IResourceOperationDef = {
 
     const mailboxPath = getMailboxPathFromNodeParameter(context, itemIndex);
     const emailUid = context.getNodeParameter('emailUid', itemIndex) as string;
-
-    logger.info(`Deleting email "${emailUid}" from "${mailboxPath}"`);
+    const messageId = context.getNodeParameter('messageId', itemIndex, '') as string;
 
     await client.mailboxOpen(mailboxPath, { readOnly: false });
 
+    // Resolve UIDs from both direct UID and Message-ID inputs
+    const resolved = await resolveEmailUids(client, emailUid, messageId, logger);
+
+    // If Message-ID was used but some were not found, return info about not found
+    if (resolved.usedMessageId && resolved.notFoundMessageIds.length > 0) {
+      for (const notFoundId of resolved.notFoundMessageIds) {
+        returnData.push({
+          json: {
+            messageIdFound: false,
+            messageId: notFoundId,
+            message: 'Email with specified Message-ID not found',
+          },
+        });
+      }
+    }
+
+    // If no UIDs to process, return early
+    if (resolved.uids.length === 0) {
+      if (returnData.length === 0) {
+        returnData.push({
+          json: {
+            messageIdFound: false,
+            messageId: messageId || '',
+            message: 'No emails found to delete',
+          },
+        });
+      }
+      return returnData;
+    }
+
+    const uidList = resolved.uids.join(',');
+    logger.info(`Deleting email(s) "${uidList}" from "${mailboxPath}"`);
+
     ImapFlowErrorCatcher.getInstance().startErrorCatching();
-    const isDeleted = await client.messageDelete(emailUid, {
+    const isDeleted = await client.messageDelete(uidList, {
       uid: true,
     });
 
@@ -52,7 +91,7 @@ export const deleteEmailOperation: IResourceOperationDef = {
 
     returnData.push({
       json: {
-        uid: emailUid,
+        uid: uidList,
         deleted: true,
       },
     });

@@ -167,6 +167,142 @@ export class ImapLoggerToN8nConverter {
 }
 
 
+/**
+ * Result of searching for emails by Message-ID
+ */
+export interface MessageIdSearchResult {
+  /** The original Message-ID pattern that was searched */
+  messageIdPattern: string;
+  /** Whether any emails were found */
+  found: boolean;
+  /** List of UIDs found for this Message-ID pattern */
+  uids: string[];
+}
+
+/**
+ * Search for emails by Message-ID header (supports partial matching)
+ * 
+ * @param client - ImapFlow client (must have mailbox already opened)
+ * @param messageIdPatterns - Array of Message-ID patterns to search for (without angle brackets)
+ * @param logger - Optional logger for debug output
+ * @returns Array of search results, one for each input pattern
+ * 
+ * @example
+ * // Search for emails with Message-ID containing "@eshop.fyzioklinika.cz"
+ * const results = await findEmailsByMessageId(client, ["@eshop.fyzioklinika.cz"], logger);
+ * // results[0].uids will contain all matching email UIDs
+ */
+export async function findEmailsByMessageId(
+  client: ImapFlow,
+  messageIdPatterns: string[],
+  logger?: N8nLogger
+): Promise<MessageIdSearchResult[]> {
+  const results: MessageIdSearchResult[] = [];
+
+  for (const pattern of messageIdPatterns) {
+    const trimmedPattern = pattern.trim();
+    if (!trimmedPattern) {
+      results.push({
+        messageIdPattern: pattern,
+        found: false,
+        uids: [],
+      });
+      continue;
+    }
+
+    logger?.debug(`Searching for emails with Message-ID containing: "${trimmedPattern}"`);
+
+    try {
+      // Use IMAP SEARCH with HEADER command to find emails by Message-ID
+      // This searches for Message-ID header containing the given pattern
+      const searchQuery = {
+        header: ['Message-ID', trimmedPattern],
+      };
+
+      const foundUids: string[] = [];
+      
+      // Search for matching emails
+      for await (const msg of client.fetch(searchQuery, { uid: true })) {
+        foundUids.push(msg.uid.toString());
+      }
+
+      logger?.debug(`Found ${foundUids.length} email(s) matching Message-ID pattern "${trimmedPattern}"`);
+
+      results.push({
+        messageIdPattern: trimmedPattern,
+        found: foundUids.length > 0,
+        uids: foundUids,
+      });
+    } catch (error) {
+      logger?.warn(`Error searching for Message-ID "${trimmedPattern}": ${error}`);
+      results.push({
+        messageIdPattern: trimmedPattern,
+        found: false,
+        uids: [],
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Resolve email UIDs from either direct UID input or Message-ID search
+ * 
+ * @param client - ImapFlow client (must have mailbox already opened)
+ * @param emailUid - Comma-separated UIDs (can be empty)
+ * @param messageId - Comma-separated Message-ID patterns (can be empty)
+ * @param logger - Optional logger
+ * @returns Object with resolved UIDs and any not-found Message-IDs
+ */
+export async function resolveEmailUids(
+  client: ImapFlow,
+  emailUid: string,
+  messageId: string,
+  logger?: N8nLogger
+): Promise<{
+  uids: string[];
+  notFoundMessageIds: string[];
+  usedMessageId: boolean;
+}> {
+  const uids: string[] = [];
+  const notFoundMessageIds: string[] = [];
+  let usedMessageId = false;
+
+  // First, add any directly specified UIDs
+  if (emailUid && emailUid.trim()) {
+    const directUids = emailUid.split(',').map(u => u.trim()).filter(u => u);
+    uids.push(...directUids);
+  }
+
+  // Then, resolve any Message-ID patterns to UIDs
+  if (messageId && messageId.trim()) {
+    usedMessageId = true;
+    const patterns = messageId.split(',').map(p => p.trim()).filter(p => p);
+    
+    if (patterns.length > 0) {
+      const searchResults = await findEmailsByMessageId(client, patterns, logger);
+      
+      for (const result of searchResults) {
+        if (result.found) {
+          uids.push(...result.uids);
+        } else {
+          notFoundMessageIds.push(result.messageIdPattern);
+        }
+      }
+    }
+  }
+
+  // Remove duplicate UIDs
+  const uniqueUids = [...new Set(uids)];
+
+  return {
+    uids: uniqueUids,
+    notFoundMessageIds,
+    usedMessageId,
+  };
+}
+
 export function createImapClient(credentials: ImapCredentialsData, logger?: N8nLogger, enableDebugLogs: boolean = false): ImapFlow {
   const loggerConverter = new ImapLoggerToN8nConverter(enableDebugLogs, logger);
 

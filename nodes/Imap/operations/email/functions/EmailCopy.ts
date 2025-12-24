@@ -5,7 +5,7 @@ import {
   getMailboxPathFromNodeParameter,
   parameterSelectMailbox,
 } from '../../../utils/SearchFieldParameters';
-import { ImapFlowErrorCatcher, NodeImapError } from '../../../utils/ImapUtils';
+import { ImapFlowErrorCatcher, NodeImapError, resolveEmailUids } from '../../../utils/ImapUtils';
 
 const PARAM_NAME_SOURCE_MAILBOX = 'sourceMailbox';
 const PARAM_NAME_DESTINATION_MAILBOX = 'destinationMailbox';
@@ -29,6 +29,14 @@ export const copyEmailOperation: IResourceOperationDef = {
       default: '',
       description: 'UID of the email to copy',
       hint: 'You can use comma separated list of UIDs to copy multiple emails at once',
+    },
+    {
+      displayName: 'Email Message-ID (Optional)',
+      name: 'messageId',
+      type: 'string',
+      default: '',
+      description: 'Message-ID from email header to identify the email (alternative to UID)',
+      hint: 'You can use comma separated list of Message-IDs to copy multiple emails at once. Supports partial matching (e.g. @example.com)',
     },
     {
       ...parameterSelectMailbox,
@@ -57,16 +65,48 @@ export const copyEmailOperation: IResourceOperationDef = {
     );
 
     const emailUid = context.getNodeParameter('emailUid', itemIndex) as string;
-
-    logger.info(
-      `Copying email "${emailUid}" from "${sourceMailboxPath}" to "${destinationMailboxPath}"`,
-    );
+    const messageId = context.getNodeParameter('messageId', itemIndex, '') as string;
 
     await client.mailboxOpen(sourceMailboxPath, { readOnly: false });
 
+    // Resolve UIDs from both direct UID and Message-ID inputs
+    const resolved = await resolveEmailUids(client, emailUid, messageId, logger);
+
+    // If Message-ID was used but some were not found, return info about not found
+    if (resolved.usedMessageId && resolved.notFoundMessageIds.length > 0) {
+      for (const notFoundId of resolved.notFoundMessageIds) {
+        returnData.push({
+          json: {
+            messageIdFound: false,
+            messageId: notFoundId,
+            message: 'Email with specified Message-ID not found',
+          },
+        });
+      }
+    }
+
+    // If no UIDs to process, return early
+    if (resolved.uids.length === 0) {
+      if (returnData.length === 0) {
+        returnData.push({
+          json: {
+            messageIdFound: false,
+            messageId: messageId || '',
+            message: 'No emails found to copy',
+          },
+        });
+      }
+      return returnData;
+    }
+
+    const uidList = resolved.uids.join(',');
+    logger.info(
+      `Copying email(s) "${uidList}" from "${sourceMailboxPath}" to "${destinationMailboxPath}"`,
+    );
+
     ImapFlowErrorCatcher.getInstance().startErrorCatching();
 
-    const resp = await client.messageCopy(emailUid, destinationMailboxPath, {
+    const resp = await client.messageCopy(uidList, destinationMailboxPath, {
       uid: true,
     });
 

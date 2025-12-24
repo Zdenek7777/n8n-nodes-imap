@@ -93,6 +93,7 @@ git push origin master
 
 | Verze | Datum | Popis změny |
 |-------|-------|-------------|
+| 2.15.0.3 | 2025-12-24 | Přidána podpora pro identifikaci emailů podle Message-ID (alternativa k UID) |
 | 2.15.0.2 | 2025-12-23 | Oprava časové filtrace - použití INTERNALDATE místo Date hlavičky |
 | 2.15.0.1 | 2025-12-03 | Parsování nestandardních formátů datumů a konverze do CR timezone |
 

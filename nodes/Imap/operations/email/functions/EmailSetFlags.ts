@@ -2,7 +2,7 @@ import { ImapFlow } from "imapflow";
 import { IDataObject, IExecuteFunctions, INodeExecutionData, Logger as N8nLogger } from "n8n-workflow";
 import { IResourceOperationDef } from "../../../utils/CommonDefinitions";
 import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from '../../../utils/SearchFieldParameters';
-import { ImapFlowErrorCatcher, NodeImapError } from "../../../utils/ImapUtils";
+import { ImapFlowErrorCatcher, NodeImapError, resolveEmailUids } from "../../../utils/ImapUtils";
 
 
 export enum ImapFlags {
@@ -38,6 +38,14 @@ export const setEmailFlagsOperation: IResourceOperationDef = {
       default: '',
       description: 'UID of the email to set flags',
       hint: 'You can use comma separated list of UIDs',
+    },
+    {
+      displayName: 'Email Message-ID (Optional)',
+      name: 'messageId',
+      type: 'string',
+      default: '',
+      description: 'Message-ID from email header to identify the email (alternative to UID)',
+      hint: 'You can use comma separated list of Message-IDs to set flags on multiple emails at once. Supports partial matching (e.g. @example.com)',
     },
     {
       displayName: 'Flags',
@@ -108,7 +116,40 @@ export const setEmailFlagsOperation: IResourceOperationDef = {
 
     const mailboxPath = getMailboxPathFromNodeParameter(context, itemIndex);
     const emailUid = context.getNodeParameter('emailUid', itemIndex) as string;
+    const messageId = context.getNodeParameter('messageId', itemIndex, '') as string;
     const flags = context.getNodeParameter('flags', itemIndex) as IDataObject;
+
+    await client.mailboxOpen(mailboxPath, { readOnly: false });
+
+    // Resolve UIDs from both direct UID and Message-ID inputs
+    const resolved = await resolveEmailUids(client, emailUid, messageId, logger);
+
+    // If Message-ID was used but some were not found, return info about not found
+    if (resolved.usedMessageId && resolved.notFoundMessageIds.length > 0) {
+      for (const notFoundId of resolved.notFoundMessageIds) {
+        returnData.push({
+          json: {
+            messageIdFound: false,
+            messageId: notFoundId,
+            message: 'Email with specified Message-ID not found',
+          },
+        });
+      }
+    }
+
+    // If no UIDs to process, return early
+    if (resolved.uids.length === 0) {
+      if (returnData.length === 0) {
+        returnData.push({
+          json: {
+            messageIdFound: false,
+            messageId: messageId || '',
+            message: 'No emails found to set flags',
+          },
+        });
+      }
+      return returnData;
+    }
 
     let flagsToSet: string[] = [];
     let flagsToRemove: string[] = [];
@@ -137,18 +178,18 @@ export const setEmailFlagsOperation: IResourceOperationDef = {
     // in case a flag is both in set and remove, remove it from remove
     flagsToRemove = flagsToRemove.filter(f => !flagsToSet.includes(f));
 
+    const uidList = resolved.uids.join(',');
+
     // prepare return data
     let jsonData: IDataObject = {
-      uid: emailUid,
+      uid: uidList,
     };
 
-    logger.info(`Setting flags "${flagsToSet.join(',')}" and removing flags "${flagsToRemove.join(',')}" on email "${emailUid}"`);
-
-    await client.mailboxOpen(mailboxPath, { readOnly: false });
+    logger.info(`Setting flags "${flagsToSet.join(',')}" and removing flags "${flagsToRemove.join(',')}" on email(s) "${uidList}"`);
 
     if (flagsToSet.length > 0) {
       ImapFlowErrorCatcher.getInstance().startErrorCatching();
-      const isSuccess : boolean = await client.messageFlagsAdd(emailUid, flagsToSet, {
+      const isSuccess : boolean = await client.messageFlagsAdd(uidList, flagsToSet, {
         uid: true,
       });
       if (!isSuccess) {
@@ -161,7 +202,7 @@ export const setEmailFlagsOperation: IResourceOperationDef = {
       }
     }
     if (flagsToRemove.length > 0) {
-      const isSuccess : boolean = await client.messageFlagsRemove(emailUid, flagsToRemove, {
+      const isSuccess : boolean = await client.messageFlagsRemove(uidList, flagsToRemove, {
         uid: true,
       });
       if (!isSuccess) {
