@@ -20,7 +20,7 @@ enum EmailSearchFilters {
   UID = 'uid',
 }
 
-export const emailSearchParameters : INodeProperties[] = [
+export const emailSearchParameters: INodeProperties[] = [
   {
     displayName: "Date Range",
     name: "emailDateRange",
@@ -160,6 +160,177 @@ export const emailSearchParameters : INodeProperties[] = [
     ],
   },
 ];
+
+/**
+ * Remove diacritics from a string (e.g., "Objednávka" -> "Objednavka")
+ * Uses Unicode normalization to decompose characters, then removes combining marks
+ * This is needed for Seznam.cz IMAP which doesn't support non-ASCII in SEARCH
+ */
+export function removeDiacritics(str: string): string {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+/**
+ * Check if string contains non-ASCII characters (e.g., Czech diacritics)
+ */
+function hasNonAsciiCharacters(str: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /[^\x00-\x7F]/.test(str);
+}
+
+/**
+ * Result of parsing email search parameters with client-side filter support
+ */
+export interface EmailSearchResult {
+  /** SearchObject to send to IMAP server (ASCII-safe, diacritics removed) */
+  searchObject: SearchObject;
+  /** Original filters for client-side filtering (with diacritics preserved) */
+  clientSideFilters: {
+    subject?: string;
+    from?: string;
+    to?: string;
+    cc?: string;
+    bcc?: string;
+    body?: string;
+  };
+  /** Whether any client-side filtering is needed */
+  needsClientSideFiltering: boolean;
+}
+
+/**
+ * Get email search parameters with client-side filter support for non-ASCII text
+ * For IMAP servers that don't support UTF-8 in SEARCH (like Seznam.cz):
+ * - Sends ASCII version (diacritics removed) to IMAP for initial filtering
+ * - Returns original text for client-side filtering after fetch
+ */
+export function getEmailSearchParametersWithClientFilters(context: IExecuteFunctions, itemIndex: number): EmailSearchResult {
+  const result: EmailSearchResult = {
+    searchObject: {},
+    clientSideFilters: {},
+    needsClientSideFiltering: false,
+  };
+
+  // date range
+  const emailDateRangeObj = context.getNodeParameter('emailDateRange', itemIndex) as IDataObject;
+  const since = emailDateRangeObj['since'] as string;
+  const before = emailDateRangeObj['before'] as string;
+
+  if (since) {
+    result.searchObject.since = new Date(since);
+  }
+  if (before) {
+    result.searchObject.before = new Date(before);
+  }
+
+  // flags - always ASCII-safe
+  const emailFlagsObj = context.getNodeParameter('emailFlags', itemIndex) as IDataObject;
+  if ('answered' in emailFlagsObj) {
+    result.searchObject.answered = emailFlagsObj['answered'] as boolean;
+  }
+  if ('deleted' in emailFlagsObj) {
+    result.searchObject.deleted = emailFlagsObj['deleted'] as boolean;
+  }
+  if ('draft' in emailFlagsObj) {
+    result.searchObject.draft = emailFlagsObj['draft'] as boolean;
+  }
+  if ('flagged' in emailFlagsObj) {
+    result.searchObject.flagged = emailFlagsObj['flagged'] as boolean;
+  }
+  if ('recent' in emailFlagsObj) {
+    const recent = emailFlagsObj['recent'] as boolean;
+    if (recent) {
+      result.searchObject.recent = true;
+    } else {
+      result.searchObject.old = true;
+    }
+  }
+  if ('seen' in emailFlagsObj) {
+    result.searchObject.seen = emailFlagsObj['seen'] as boolean;
+  }
+
+  // search filters - handle non-ASCII characters
+  const emailSearchFiltersObj = context.getNodeParameter('emailSearchFilters', itemIndex) as IDataObject;
+
+  // Subject
+  if ('subject' in emailSearchFiltersObj) {
+    const subject = emailSearchFiltersObj['subject'] as string;
+    if (hasNonAsciiCharacters(subject)) {
+      // Send ASCII version to IMAP, keep original for client-side filter
+      result.searchObject.subject = removeDiacritics(subject);
+      result.clientSideFilters.subject = subject;
+      result.needsClientSideFiltering = true;
+    } else {
+      result.searchObject.subject = subject;
+    }
+  }
+
+  // From
+  if ('from' in emailSearchFiltersObj) {
+    const from = emailSearchFiltersObj['from'] as string;
+    if (hasNonAsciiCharacters(from)) {
+      result.searchObject.from = removeDiacritics(from);
+      result.clientSideFilters.from = from;
+      result.needsClientSideFiltering = true;
+    } else {
+      result.searchObject.from = from;
+    }
+  }
+
+  // To
+  if ('to' in emailSearchFiltersObj) {
+    const to = emailSearchFiltersObj['to'] as string;
+    if (hasNonAsciiCharacters(to)) {
+      result.searchObject.to = removeDiacritics(to);
+      result.clientSideFilters.to = to;
+      result.needsClientSideFiltering = true;
+    } else {
+      result.searchObject.to = to;
+    }
+  }
+
+  // CC
+  if ('cc' in emailSearchFiltersObj) {
+    const cc = emailSearchFiltersObj['cc'] as string;
+    if (hasNonAsciiCharacters(cc)) {
+      result.searchObject.cc = removeDiacritics(cc);
+      result.clientSideFilters.cc = cc;
+      result.needsClientSideFiltering = true;
+    } else {
+      result.searchObject.cc = cc;
+    }
+  }
+
+  // BCC
+  if ('bcc' in emailSearchFiltersObj) {
+    const bcc = emailSearchFiltersObj['bcc'] as string;
+    if (hasNonAsciiCharacters(bcc)) {
+      result.searchObject.bcc = removeDiacritics(bcc);
+      result.clientSideFilters.bcc = bcc;
+      result.needsClientSideFiltering = true;
+    } else {
+      result.searchObject.bcc = bcc;
+    }
+  }
+
+  // Text/Body
+  if ('text' in emailSearchFiltersObj) {
+    const text = emailSearchFiltersObj['text'] as string;
+    if (hasNonAsciiCharacters(text)) {
+      result.searchObject.body = removeDiacritics(text);
+      result.clientSideFilters.body = text;
+      result.needsClientSideFiltering = true;
+    } else {
+      result.searchObject.body = text;
+    }
+  }
+
+  // UID - always ASCII
+  if ('uid' in emailSearchFiltersObj) {
+    result.searchObject.uid = emailSearchFiltersObj['uid'] as string;
+  }
+
+  return result;
+}
 
 export function getEmailSearchParametersFromNode(context: IExecuteFunctions, itemIndex: number): SearchObject {
   var searchObject: SearchObject = {};

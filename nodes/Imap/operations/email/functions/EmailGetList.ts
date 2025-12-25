@@ -3,7 +3,7 @@ import { Readable } from "stream";
 import { IDataObject, IExecuteFunctions, INodeExecutionData, Logger as N8nLogger } from "n8n-workflow";
 import { IResourceOperationDef } from "../../../utils/CommonDefinitions";
 import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from "../../../utils/SearchFieldParameters";
-import { emailSearchParameters, getEmailSearchParametersFromNode } from "../../../utils/EmailSearchParameters";
+import { emailSearchParameters, getEmailSearchParametersWithClientFilters } from "../../../utils/EmailSearchParameters";
 import { simpleParser } from 'mailparser';
 import { EmailPartInfo, getEmailPartsInfoRecursive } from "../../../utils/EmailParts";
 import { parseEmailDate, convertToCRTimezone } from "../../../utils/dateParser";
@@ -124,16 +124,27 @@ export const getEmailsListOperation: IResourceOperationDef = {
 
     await client.mailboxOpen(mailboxPath);
 
-    var searchObject = getEmailSearchParametersFromNode(context, itemIndex);
+    // Get search parameters with client-side filter support for non-ASCII text
+    // For Seznam.cz and similar: sends ASCII version to IMAP, keeps original for client-side filtering
+    const searchParams = getEmailSearchParametersWithClientFilters(context, itemIndex);
+    const searchObject = searchParams.searchObject;
+    const clientSideFilters = searchParams.clientSideFilters;
+
+    if (searchParams.needsClientSideFiltering) {
+      logger.info(`Non-ASCII characters detected in search filters, will apply client-side filtering after IMAP fetch`);
+      if (clientSideFilters.subject) {
+        logger.info(`  Subject filter: "${clientSideFilters.subject}" (IMAP will search for ASCII version)`);
+      }
+    }
 
     // Log date range parameters for debugging
     const emailDateRangeObj = context.getNodeParameter('emailDateRange', itemIndex) as IDataObject;
     const sinceInput = emailDateRangeObj['since'] as string;
     const beforeInput = emailDateRangeObj['before'] as string;
-    
+
     if (sinceInput || beforeInput) {
       logger.info(`Date range input - Since: ${sinceInput || 'not set'}, Before: ${beforeInput || 'not set'}`);
-      
+
       // Check if time components are specified (IMAP only works with dates, not times)
       if (sinceInput) {
         const sinceDate = new Date(sinceInput);
@@ -149,7 +160,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
           logger.warn(`IMAP protocol limitation: 'Before' date has time component (${beforeInput}), but IMAP SEARCH only works with dates, not times. The search will include all emails from the entire day.`);
         }
       }
-      
+
       // Log what will actually be sent to IMAP server
       if (searchObject.since) {
         const sinceDate = searchObject.since as Date;
@@ -162,7 +173,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
     }
 
     const includeParts = context.getNodeParameter('includeParts', itemIndex) as string[];
-    var fetchQuery : FetchQueryObject = {
+    var fetchQuery: FetchQueryObject = {
       uid: true,
       envelope: true,
       // Note: internalDate is automatically included in FetchMessageObject by imapflow
@@ -180,7 +191,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
       fetchQuery.size = true;
     }
     // Always fetch Date header to ensure we can extract date even if envelope.date is missing
-    if (includeParts.includes(EmailParts.Headers)) {      
+    if (includeParts.includes(EmailParts.Headers)) {
       // check if user wants only specific headers
       const includeAllHeaders = context.getNodeParameter('includeAllHeaders', itemIndex) as boolean;
       if (includeAllHeaders) {
@@ -227,7 +238,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
     // because we might need to fetch the body parts for each email,
     // and this will freeze the client if we do it in parallel
     const emailsList: FetchMessageObject[] = [];
-    for  await (let email of client.fetch(searchObject, fetchQuery)) {
+    for await (let email of client.fetch(searchObject, fetchQuery)) {
       emailsList.push(email);
     }
     logger.info(`Found ${emailsList.length} emails from IMAP server`);
@@ -238,12 +249,12 @@ export const getEmailsListOperation: IResourceOperationDef = {
     if (sinceInput || beforeInput) {
       const sinceDate = sinceInput ? new Date(sinceInput) : null;
       const beforeDate = beforeInput ? new Date(beforeInput) : null;
-      
+
       // Check if time filtering is needed (if time components are specified)
-      const needsTimeFiltering = 
+      const needsTimeFiltering =
         (sinceDate && (sinceDate.getHours() !== 0 || sinceDate.getMinutes() !== 0 || sinceDate.getSeconds() !== 0)) ||
         (beforeDate && (beforeDate.getHours() !== 0 || beforeDate.getMinutes() !== 0 || beforeDate.getSeconds() !== 0));
-      
+
       if (needsTimeFiltering) {
         logger.info(`Applying client-side time filtering (IMAP only supports date-based search)`);
         filteredEmailsList = emailsList.filter((email) => {
@@ -253,14 +264,14 @@ export const getEmailsListOperation: IResourceOperationDef = {
           // INTERNALDATE represents when the email actually arrived on the IMAP server
           let emailDate: Date | null = null;
           let dateSource = 'unknown';
-          
+
           // Priority 1: Use internalDate (INTERNALDATE from IMAP server - actual delivery time)
           // This is the most accurate for filtering, as it represents when email actually arrived
           // Note: internalDate is automatically included in FetchMessageObject by imapflow
           const emailInternalDate = (email as any).internalDate;
           if (emailInternalDate) {
-            emailDate = emailInternalDate instanceof Date 
-              ? emailInternalDate 
+            emailDate = emailInternalDate instanceof Date
+              ? emailInternalDate
               : new Date(emailInternalDate);
             dateSource = 'internalDate';
           }
@@ -287,30 +298,70 @@ export const getEmailsListOperation: IResourceOperationDef = {
               logger.debug(`    Email ${email.uid}: Could not extract date from headers for filtering: ${error}`);
             }
           }
-          
+
           if (!emailDate || isNaN(emailDate.getTime())) {
             // If we can't determine the date, include the email (don't filter it out)
             logger.debug(`    Email ${email.uid}: Could not determine date, including in results`);
             return true;
           }
-          
+
           // Check if email date is within the time range
           const isAfterSince = !sinceDate || emailDate >= sinceDate;
           const isBeforeBefore = !beforeDate || emailDate < beforeDate;
-          
+
           const isInRange = isAfterSince && isBeforeBefore;
-          
+
           if (!isInRange) {
             logger.debug(`    Email ${email.uid}: Filtered out (date: ${emailDate.toISOString()} [${dateSource}], since: ${sinceDate?.toISOString() || 'none'}, before: ${beforeDate?.toISOString() || 'none'})`);
           } else {
             logger.debug(`    Email ${email.uid}: Passed filter (date: ${emailDate.toISOString()} [${dateSource}])`);
           }
-          
+
           return isInRange;
         });
-        
+
         logger.info(`After time filtering: ${filteredEmailsList.length} emails (filtered out ${emailsList.length - filteredEmailsList.length} emails)`);
       }
+    }
+
+    // Client-side filtering for non-ASCII text (e.g., Czech diacritics)
+    // This is needed because Seznam.cz IMAP doesn't support UTF-8 in SEARCH commands
+    if (searchParams.needsClientSideFiltering) {
+      const beforeClientFilter = filteredEmailsList.length;
+
+      filteredEmailsList = filteredEmailsList.filter((email) => {
+        // Check subject filter
+        if (clientSideFilters.subject) {
+          const emailSubject = email.envelope?.subject || '';
+          // Case-insensitive contains check
+          if (!emailSubject.toLowerCase().includes(clientSideFilters.subject.toLowerCase())) {
+            logger.debug(`    Email ${email.uid}: Filtered out (subject "${emailSubject}" doesn't contain "${clientSideFilters.subject}")`);
+            return false;
+          }
+        }
+
+        // Check from filter
+        if (clientSideFilters.from) {
+          const fromAddresses = email.envelope?.from?.map((a: { address?: string; name?: string }) =>
+            `${a.name || ''} ${a.address || ''}`).join(' ') || '';
+          if (!fromAddresses.toLowerCase().includes(clientSideFilters.from.toLowerCase())) {
+            return false;
+          }
+        }
+
+        // Check to filter
+        if (clientSideFilters.to) {
+          const toAddresses = email.envelope?.to?.map((a: { address?: string; name?: string }) =>
+            `${a.name || ''} ${a.address || ''}`).join(' ') || '';
+          if (!toAddresses.toLowerCase().includes(clientSideFilters.to.toLowerCase())) {
+            return false;
+          }
+        }
+
+        return true;
+      });
+
+      logger.info(`After client-side text filtering: ${filteredEmailsList.length} emails (filtered out ${beforeClientFilter - filteredEmailsList.length} emails)`);
     }
 
     // process the emails
@@ -325,7 +376,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
       // FIX: Extract and display date from email (always show date if available)
       // ============================================
       let originalDate: string | null = null;
-      
+
       // First, try to get original date from headers (before JSON serialization converts it)
       // This preserves the exact format as received in the email
       if (email.headers) {
@@ -342,7 +393,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
           logger.debug(`    Could not extract date from headers: ${error}`);
         }
       }
-      
+
       // If not found in headers, try to get date from envelope
       // Note: After JSON.parse(JSON.stringify()), Date objects become ISO strings
       if ((!originalDate || !originalDate.trim()) && item_json.envelope?.date !== null && item_json.envelope?.date !== undefined) {
@@ -357,40 +408,40 @@ export const getEmailsListOperation: IResourceOperationDef = {
           originalDate = String(item_json.envelope.date);
         }
       }
-      
+
       // ALWAYS set date fields if we found a date (even if it's in non-standard format)
       if (originalDate && originalDate.trim()) {
         // Ensure envelope object exists
         if (!item_json.envelope) {
           item_json.envelope = {};
         }
-        
+
         // Store original date exactly as received (before any parsing)
         const dateOriginal = originalDate;
-        
+
         // Try to parse the date to ISO format
         const parsedDateISO = parseEmailDate(originalDate);
-        
+
         // Convert parsed ISO date to CR timezone format
         let dateInCRTimezone: string | null = null;
         if (parsedDateISO && parsedDateISO.trim() && parsedDateISO !== originalDate) {
           dateInCRTimezone = convertToCRTimezone(parsedDateISO);
         }
-        
+
         // Reconstruct envelope object with correct field order: date, dateOriginal, then other fields
         const envelopeDate = dateInCRTimezone || parsedDateISO || originalDate;
         const envelopeDateOriginal = dateOriginal;
-        
+
         // Get all other envelope fields
         const { date: _, dateOriginal: __, ...otherEnvelopeFields } = item_json.envelope;
-        
+
         // Rebuild envelope with correct order: date first, then dateOriginal, then other fields
         item_json.envelope = {
           date: envelopeDate,
           dateOriginal: envelopeDateOriginal,
           ...otherEnvelopeFields,
         };
-        
+
         // Set top-level date field to CR timezone format (or parsed ISO if conversion failed)
         item_json.date = dateInCRTimezone || parsedDateISO || originalDate;
       }
@@ -443,7 +494,7 @@ export const getEmailsListOperation: IResourceOperationDef = {
             } else {
               // if there is only one part, to sometimes it has no partId
               // in that case, ImapFlow uses "TEXT" as partId to download the only part
-              if (partInfo.type === 'text/plain') {                
+              if (partInfo.type === 'text/plain') {
                 textPartId = partInfo.partId;
               }
               if (partInfo.type === 'text/html') {

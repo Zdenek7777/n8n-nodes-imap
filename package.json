@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-imap",
-  "version": "2.15.0.3",
+  "version": "2.15.0.4",
   "description": "This node allows you to connect to an IMAP server and retrieve emails. Fork by Zdeněk Bílek with timezone/date parsing fixes and Message-ID support.",
   "keywords": [
     "n8n-community-node-package"
