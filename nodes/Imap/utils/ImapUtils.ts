@@ -64,7 +64,7 @@ export class NodeImapError extends NodeOperationError {
  * 
  */
 export class ImapFlowErrorCatcher {
-  private static instance: ImapFlowErrorCatcher;  
+  private static instance: ImapFlowErrorCatcher;
   private errorsList: ImapErrorsList = new ImapErrorsList();
 
   private isCatching = false;
@@ -81,7 +81,7 @@ export class ImapFlowErrorCatcher {
     return ImapFlowErrorCatcher.instance;
   }
 
-  private clear() {    
+  private clear() {
     this.errorsList = new ImapErrorsList();
   }
 
@@ -163,7 +163,7 @@ export class ImapLoggerToN8nConverter {
     }
     this.n8nLogger.warn(`IMAP warning: ${JSON.stringify(entry)}`);
   }
-  
+
 }
 
 
@@ -216,11 +216,11 @@ export async function findEmailsByMessageId(
       // Use IMAP SEARCH with HEADER command to find emails by Message-ID
       // This searches for Message-ID header containing the given pattern
       const searchQuery = {
-        header: ['Message-ID', trimmedPattern],
+        header: { 'Message-ID': trimmedPattern },
       };
 
       const foundUids: string[] = [];
-      
+
       // Search for matching emails
       for await (const msg of client.fetch(searchQuery, { uid: true })) {
         foundUids.push(msg.uid.toString());
@@ -270,8 +270,9 @@ export async function resolveEmailUids(
   let usedMessageId = false;
 
   // First, add any directly specified UIDs
-  if (emailUid && emailUid.trim()) {
-    const directUids = emailUid.split(',').map(u => u.trim()).filter(u => u);
+  const emailUidStr = emailUid ? String(emailUid) : '';
+  if (emailUidStr.trim()) {
+    const directUids = emailUidStr.split(',').map(u => u.trim()).filter(u => u);
     uids.push(...directUids);
   }
 
@@ -279,10 +280,10 @@ export async function resolveEmailUids(
   if (messageId && messageId.trim()) {
     usedMessageId = true;
     const patterns = messageId.split(',').map(p => p.trim()).filter(p => p);
-    
+
     if (patterns.length > 0) {
       const searchResults = await findEmailsByMessageId(client, patterns, logger);
-      
+
       for (const result of searchResults) {
         if (result.found) {
           uids.push(...result.uids);
@@ -324,7 +325,7 @@ export function createImapClient(credentials: ImapCredentialsData, logger?: N8nL
     if (credentials.startTLSUsage === STARTTLS_USAGE.IF_SUPPORTED) {
       // don't set doSTARTTLS, ImapFlow will use it if the server supports it
     } else {
-      const doSTARTTLS : boolean = credentials.startTLSUsage === STARTTLS_USAGE.ALWAYS;
+      const doSTARTTLS: boolean = credentials.startTLSUsage === STARTTLS_USAGE.ALWAYS;
       imapflowOptions = {
         ...imapflowOptions,
         doSTARTTLS: doSTARTTLS,

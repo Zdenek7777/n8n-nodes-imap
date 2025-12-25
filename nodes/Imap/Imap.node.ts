@@ -18,7 +18,7 @@ export class Imap implements INodeType {
     group: ['transform'],
     version: 1,
     subtitle: '={{ $parameter["operation"] + ": " + $parameter["resource"] }}',
-    description: 'Retrieve emails via IMAP',
+    description: 'Retrieve emails via IMAP (Fork v2.15.0.4)',
     defaults: {
       name: 'IMAP',
     },
@@ -116,7 +116,7 @@ export class Imap implements INodeType {
     ],
   };
 
-  async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][] > {
+  async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
     const credentials = await getImapCredentials(this);
 
     // get debug parameters
@@ -124,7 +124,7 @@ export class Imap implements INodeType {
 
     const loggerWatcher = new DebugLoggerWatcher(this.logger);
     const imapflowLogger = loggerWatcher.getWatchedLogger('imapflow');
-    const nodeLogger = loggerWatcher.getWatchedLogger('node');    
+    const nodeLogger = loggerWatcher.getWatchedLogger('node');
 
     // get operation parameters
     const FIRST_ITEM_INDEX = 0; // resource and operation are the same for all items
@@ -181,13 +181,13 @@ export class Imap implements INodeType {
 
 
 export async function executeWithHandler(
-  context: IExecuteFunctions, 
-  client: ImapFlow, 
+  context: IExecuteFunctions,
+  client: ImapFlow,
   handler: IResourceOperationDef,
   nodeLogger?: N8nLogger,
   debugParameters?: ImapNodeDebugParameters,
   loggerWatcher?: DebugLoggerWatcher
-): Promise<INodeExecutionData[][] > {
+): Promise<INodeExecutionData[][]> {
 
   // default parameters
   if (!nodeLogger) {
@@ -256,7 +256,7 @@ export async function executeWithHandler(
             var errorMessage = error.responseText || error.message || 'Unknown error';
 
             nodeLogger.error(`Operation failed`);
-            
+
 
             throw new NodeImapError(context.getNode(), errorMessage, imapErrorsList);
           }
@@ -277,7 +277,7 @@ export async function executeWithHandler(
             throw error;
           }
         }
-      } 
+      }
 
       // close connection
       client.logout();
