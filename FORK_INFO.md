@@ -93,6 +93,7 @@ git push origin master
 
 | Verze | Datum | Popis změny |
 |-------|-------|-------------|
+| 2.15.0.5 | 2025-12-26 | Přidána volba "Mark As Seen After Move" pro operaci Move emailu |
 | 2.15.0.4 | 2025-12-25 | Oprava vyhledávání s českými znaky (Seznam.cz) - ASCII dotaz na IMAP + client-side filtrování |
 | 2.15.0.3 | 2025-12-24 | Přidána podpora pro identifikaci emailů podle Message-ID (alternativa k UID) |
 | 2.15.0.2 | 2025-12-23 | Oprava časové filtrace - použití INTERNALDATE místo Date hlavičky |
