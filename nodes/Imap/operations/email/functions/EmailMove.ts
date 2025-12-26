@@ -3,6 +3,7 @@ import { IExecuteFunctions, INodeExecutionData, Logger as N8nLogger } from "n8n-
 import { IResourceOperationDef } from "../../../utils/CommonDefinitions";
 import { getMailboxPathFromNodeParameter, parameterSelectMailbox } from '../../../utils/SearchFieldParameters';
 import { ImapFlowErrorCatcher, NodeImapError, resolveEmailUids } from "../../../utils/ImapUtils";
+import { ImapFlags } from "./EmailSetFlags";
 
 
 
@@ -42,6 +43,13 @@ export const moveEmailOperation: IResourceOperationDef = {
       displayName: 'Destination Mailbox',
       description: 'Select the destination mailbox',
       name: PARAM_NAME_DESTINATION_MAILBOX,
+    },
+    {
+      displayName: 'Mark As Seen After Move',
+      name: 'markAsSeen',
+      type: 'boolean',
+      default: false,
+      description: 'Whether to mark the email as seen (read) after moving to the destination mailbox. If disabled, the email keeps its original read/unread status.',
     },
   ],
   async executeImapAction(context: IExecuteFunctions, logger: N8nLogger, itemIndex: number, client: ImapFlow): Promise<INodeExecutionData[] | null> {
@@ -104,7 +112,26 @@ export const moveEmailOperation: IResourceOperationDef = {
       );
     }
 
+    // If markAsSeen is enabled, set the \Seen flag on the moved email in destination mailbox
+    const markAsSeen = context.getNodeParameter('markAsSeen', itemIndex, false) as boolean;
+    if (markAsSeen && resp.uidMap) {
+      // resp.uidMap contains mapping of source UIDs to destination UIDs
+      // Get the new UIDs from the destination mailbox
+      const newUids = Array.from(resp.uidMap.values()).join(',');
+      if (newUids) {
+        logger.info(`Marking email(s) as seen in destination mailbox. New UIDs: ${newUids}`);
+
+        // Open destination mailbox and set Seen flag
+        await client.mailboxOpen(destinationMailboxPath, { readOnly: false });
+        const flagResult = await client.messageFlagsAdd(newUids, [ImapFlags.Seen], { uid: true });
+        if (!flagResult) {
+          logger.warn('Failed to set Seen flag on moved email(s)');
+        }
+      }
+    }
+
     var item_json = JSON.parse(JSON.stringify(resp));
+    item_json.markedAsSeen = markAsSeen;
 
     returnData.push({
       json: item_json,
