@@ -74,3 +74,5 @@ Pokud máš problémy s opravou, zkontroluj:
 2. Zda je node správně sestaven (pokud používáš build)
 3. Zda jsou aktivní debug logy pro ověření
 
+
+

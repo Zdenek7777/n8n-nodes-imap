@@ -19,6 +19,45 @@ export const createDraftOperation: IResourceOperationDef = {
       description: 'Select the mailbox',
       name: PARAM_NAME_DESTINATION_MAILBOX,
     },
+    // Email flags selection (same pattern as EmailSetFlags for consistent UX)
+    {
+      displayName: 'Flags',
+      name: 'flags',
+      type: 'collection',
+      default: { '\\Draft': true },
+      placeholder: 'Add Flag',
+      description: 'Set email flags when creating the draft',
+      options: [
+        {
+          displayName: 'Draft',
+          name: '\\Draft',
+          type: 'boolean',
+          default: true,
+          description: 'Whether email is a draft',
+        },
+        {
+          displayName: 'Seen',
+          name: '\\Seen',
+          type: 'boolean',
+          default: false,
+          description: 'Whether email is marked as read',
+        },
+        {
+          displayName: 'Flagged',
+          name: '\\Flagged',
+          type: 'boolean',
+          default: false,
+          description: 'Whether email is flagged/starred',
+        },
+        {
+          displayName: 'Answered',
+          name: '\\Answered',
+          type: 'boolean',
+          default: false,
+          description: 'Whether email is marked as answered',
+        },
+      ],
+    },
     // select input format (RFC822 or fields)
     {
       displayName: 'Input Format',
@@ -39,7 +78,7 @@ export const createDraftOperation: IResourceOperationDef = {
     },
     // required parameters for fields input format
     {
-      displayName: 'Use <a href="https://github.com/umanamente/n8n-nodes-eml" target="_blank"><pre>n8n-nodes-eml</pre></a> to compose complex emails. ' + 
+      displayName: 'Use <a href="https://github.com/umanamente/n8n-nodes-eml" target="_blank"><pre>n8n-nodes-eml</pre></a> to compose complex emails. ' +
         'It supports attachments and other features. ' +
         'Then use RFC822 input format provided by that node.',
       name: 'noticeSlowResponse',
@@ -149,9 +188,9 @@ export const createDraftOperation: IResourceOperationDef = {
       // compose rfc822 content using nodemailer
 
       let transporter = nodemailer.createTransport({
-          streamTransport: true,
-          buffer: true,
-          newline: 'unix',
+        streamTransport: true,
+        buffer: true,
+        newline: 'unix',
       });
 
 
@@ -223,10 +262,28 @@ export const createDraftOperation: IResourceOperationDef = {
 
     ImapFlowErrorCatcher.getInstance().startErrorCatching();
 
+    // Build flags array from parameters (collection type returns object with flag names as keys)
+    const flagsParam = context.getNodeParameter('flags', itemIndex, {}) as Record<string, boolean>;
+    const flags: string[] = [];
+
+    // Process flags from collection - keys are like '\\Draft', '\\Seen', etc.
+    for (const flagName of Object.keys(flagsParam)) {
+      if (flagsParam[flagName] === true) {
+        flags.push(flagName);
+      }
+    }
+
+    // If no flags were explicitly set, default to Draft
+    if (flags.length === 0) {
+      flags.push("\\Draft");
+    }
+
+    logger.info(`CreateDraft: Appending to "${destinationMailboxPath}" with flags: [${flags.join(', ')}]`);
+
     const resp = await client.append(
       destinationMailboxPath,
       rfc822Content,
-      ["\\Draft"],
+      flags,
     );
 
 
